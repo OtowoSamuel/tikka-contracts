@@ -1,4 +1,4 @@
-use soroban_sdk::{contractevent, Address, BytesN, u128};
+use soroban_sdk::{contractevent, Address, BytesN};
 use raffle_shared::AdminOp;
 
 #[derive(Clone)]
@@ -73,6 +73,15 @@ pub struct CheckpointCreated {
     pub raffle_count: u32,
     pub ledger_timestamp: u64,
     pub aggregate_hash: BytesN<32>,
+}
+
+#[derive(Clone)]
+#[contractevent]
+pub struct SupportedSacUpdated {
+    pub token: Address,
+    pub supported: bool,
+    pub updated_by: Address,
+    pub timestamp: u64,
 }
 
 #[derive(Clone)]

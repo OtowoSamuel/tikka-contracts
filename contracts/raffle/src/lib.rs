@@ -51,6 +51,7 @@ pub enum DataKey {
     MinCreationDelay,
     LastCreationTime(Address),
     WhitelistedPartner(Address),
+    SupportedSac(Address),
     TotalVolumePerAsset(Address),
     RaffleInstancesCount,
 }
@@ -79,6 +80,7 @@ pub enum ContractError {
     TimelockNotElapsed = 15,
     InvalidRaffleId = 16,
     RaffleNotEligible = 17,
+    UnsupportedSac = 18,
 }
 
 #[contract]
@@ -102,6 +104,18 @@ fn require_factory_not_paused(env: &Env) -> Result<(), ContractError> {
         .unwrap_or(false)
     {
         return Err(ContractError::ContractPaused);
+    }
+    Ok(())
+}
+
+fn require_supported_sac(env: &Env, token: &Address) -> Result<(), ContractError> {
+    let supported = env
+        .storage()
+        .persistent()
+        .get(&DataKey::SupportedSac(token.clone()))
+        .unwrap_or(false);
+    if !supported {
+        return Err(ContractError::UnsupportedSac);
     }
     Ok(())
 }
@@ -292,6 +306,7 @@ impl RaffleFactory {
     ) -> Result<Address, ContractError> {
         creator.require_auth();
         require_factory_not_paused(&env)?;
+        require_supported_sac(&env, &config.payment_token)?;
 
         let is_whitelisted = env
             .storage()
@@ -662,6 +677,33 @@ impl RaffleFactory {
             .persistent()
             .set(&DataKey::WhitelistedPartner(partner), &status);
         Ok(())
+    }
+
+    pub fn set_supported_sac(
+        env: Env,
+        token: Address,
+        supported: bool,
+    ) -> Result<(), ContractError> {
+        let admin = require_admin(&env)?;
+        env.storage()
+            .persistent()
+            .set(&DataKey::SupportedSac(token.clone()), &supported);
+
+        events::SupportedSacUpdated {
+            token,
+            supported,
+            updated_by: admin,
+            timestamp: env.ledger().timestamp(),
+        }.publish(&env);
+
+        Ok(())
+    }
+
+    pub fn is_supported_sac(env: Env, token: Address) -> bool {
+        env.storage()
+            .persistent()
+            .get(&DataKey::SupportedSac(token))
+            .unwrap_or(false)
     }
 
     pub fn clean_old_raffle(env: Env, raffle_id: u32) -> Result<(), ContractError> {
