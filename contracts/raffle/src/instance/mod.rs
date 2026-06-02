@@ -65,47 +65,66 @@ pub enum RandomnessSource {
 #[derive(Clone)]
 #[contracttype]
 pub struct Raffle {
+    // Addresses and optional addresses grouped together
     pub creator: Address,
-    pub description: String,
-    pub end_time: u64,
-    pub max_tickets: u32,
-    pub allow_multiple: bool,
-    pub ticket_price: i128,
     pub payment_token: Address,
-    pub prize_amount: i128,
-    pub prizes: Vec<u32>, // Basis points for each tier (e.g., [5000, 3000, 2000])
-    pub tickets_sold: u32,
-    pub status: RaffleStatus,
-    pub prize_deposited: bool,
-    pub winners: Vec<Address>,
-    pub claimed_winners: Vec<bool>, // Track which tier has been claimed
-    pub randomness_source: RandomnessSource,
-    pub oracle_address: Option<Address>,
-    pub protocol_fee_bp: u32,
     pub treasury_address: Option<Address>,
     pub swap_router: Option<Address>,
     pub tikka_token: Option<Address>,
+    pub oracle_address: Option<Address>,
+
+    // Variable-length collections and text
+    pub description: String,
+    pub prizes: Vec<u32>, // Basis points for each tier (e.g., [5000, 3000, 2000])
+    pub winners: Vec<Address>,
+    pub claimed_winners: Vec<bool>, // Track which tier has been claimed
+
+    // Large numeric fields grouped for alignment
+    pub ticket_price: i128,
+    pub prize_amount: i128,
+
+    // Time and optional time
+    pub end_time: u64,
     pub finalized_at: Option<u64>,
+
+    // Counts and small integers
+    pub max_tickets: u32,
+    pub tickets_sold: u32,
+    pub protocol_fee_bp: u32,
     pub winner_ticket_id: Option<u32>,
+
+    // Small enums/flags
+    pub allow_multiple: bool,
+    pub prize_deposited: bool,
+    pub status: RaffleStatus,
+    pub randomness_source: RandomnessSource,
 }
 
 #[derive(Clone)]
 #[contracttype]
 pub struct RaffleConfig {
-    pub description: String,
-    pub end_time: u64,
-    pub max_tickets: u32,
-    pub allow_multiple: bool,
-    pub ticket_price: i128,
+    // Addresses
     pub payment_token: Address,
-    pub prize_amount: i128,
-    pub prizes: Vec<u32>, // Basis points for each tier
-    pub randomness_source: RandomnessSource,
-    pub oracle_address: Option<Address>,
-    pub protocol_fee_bp: u32,
     pub treasury_address: Option<Address>,
     pub swap_router: Option<Address>,
     pub tikka_token: Option<Address>,
+    pub oracle_address: Option<Address>,
+
+    // Variable-length and descriptive fields
+    pub description: String,
+    pub prizes: Vec<u32>, // Basis points for each tier
+
+    // Large numeric fields
+    pub ticket_price: i128,
+    pub prize_amount: i128,
+
+    // Time and small integers
+    pub end_time: u64,
+    pub max_tickets: u32,
+    pub allow_multiple: bool,
+
+    pub randomness_source: RandomnessSource,
+    pub protocol_fee_bp: u32,
 }
 
 #[derive(Clone)]
