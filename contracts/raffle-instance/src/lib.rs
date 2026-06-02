@@ -118,6 +118,7 @@ pub enum Error {
     NotInitialized = 43,
     Reentrancy = 44,
     TokenTransferFailed = 45,
+    ZeroPrize = 46,
 }
 
 fn read_raffle(env: &Env) -> Result<Raffle, Error> {
@@ -589,6 +590,7 @@ impl Contract {
 
         let fee = amount * (raffle.protocol_fee_bp as i128) / 10000;
         let net_amount = amount - fee;
+        require!(net_amount > 0, Error::ZeroPrize);
 
         raffle.claimed_winners.set(tier_index, true);
         
