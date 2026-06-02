@@ -612,12 +612,13 @@ impl Contract {
 
     pub fn cancel_raffle(env: Env, reason: CancelReason) -> Result<(), Error> {
         let mut raffle = read_raffle(&env)?;
-        
-        if reason == CancelReason::AdminCancelled {
-            let admin: Address = env.storage().instance().get(&DataKey::Admin).ok_or(Error::NotAuthorized)?;
-            admin.require_auth();
-        } else {
-            raffle.creator.require_auth();
+
+        match reason {
+            CancelReason::AdminCancelled => {
+                let admin: Address = env.storage().instance().get(&DataKey::Admin).ok_or(Error::NotAuthorized)?;
+                admin.require_auth();
+            }
+            _ => raffle.creator.require_auth(),
         }
 
         if raffle.status == RaffleStatus::Finalized || raffle.status == RaffleStatus::Cancelled || raffle.status == RaffleStatus::Claimed {
