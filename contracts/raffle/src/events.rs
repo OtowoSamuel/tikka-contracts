@@ -1,4 +1,4 @@
-use soroban_sdk::{contractevent, Address, BytesN, u128};
+use soroban_sdk::{contractevent, Address, BytesN};
 use raffle_shared::AdminOp;
 
 #[derive(Clone)]
@@ -86,10 +86,8 @@ pub struct RaffleCleanedUp {
 
 #[derive(Clone)]
 #[contractevent]
-pub struct FactoryTokensRescued {
-    pub rescued_by: Address,
-    pub token: Address,
-    pub recipient: Address,
-    pub amount: i128,
+pub struct CreationRateLimited {
+    pub creator: Address,
+    pub unlock_timestamp: u64,
     pub timestamp: u64,
 }
