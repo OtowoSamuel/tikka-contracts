@@ -1,5 +1,5 @@
-use soroban_sdk::{contractevent, Address, BytesN, String, Vec};
 use raffle_shared::{CancelReason, RandomnessSource, RandomnessType};
+use soroban_sdk::{contractevent, Address, BytesN, String, Vec};
 
 #[derive(Clone)]
 #[contractevent]
@@ -48,6 +48,7 @@ pub struct TicketPurchased {
     pub timestamp: u64,
 }
 
+#[allow(dead_code)]
 #[derive(Clone)]
 #[contractevent]
 pub struct DrawTriggered {
