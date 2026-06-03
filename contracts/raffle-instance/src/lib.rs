@@ -20,18 +20,18 @@ use raffle_shared::{
 use self::randomness::{OracleSeedWinnerSelection, WinnerSelectionStrategy};
 
 use crate::events::{
-    DrawTriggered, PrizeClaimed, PrizeDeposited, PrizeRefunded, RaffleCancelled, RaffleCreated,
-    RaffleFinalized, RaffleStatusChanged, RandomnessReceived,
-    RandomnessRequested, TicketPurchased,
-    WinnerDrawn, RandomnessFallbackTriggered,
-    ContractPaused, ContractUnpaused,
-    EmergencyWithdrawn,
+    ContractPaused, ContractUnpaused, EmergencyWithdrawn, PrizeClaimed, PrizeDeposited,
+    PrizeRefunded, RaffleCancelled, RaffleCreated, RaffleFinalized, RaffleStatusChanged,
+    RandomnessFallbackTriggered, RandomnessReceived, RandomnessRequested, TicketPurchased,
+    TicketRefunded, WinnerDrawn,
 };
 
 const ORACLE_TIMEOUT_LEDGERS: u32 = 200;
 pub const MAX_DESCRIPTION_LENGTH: u32 = 1000;
 pub const MAX_TICKETS_LIMIT: u32 = 100_000;
+pub const MAX_PRIZES: u32 = 100;
 pub const MIN_TICKET_PRICE: i128 = 10_000;
+pub const MAX_PRIZE_AMOUNT: i128 = 1_000_000_000_000_000_000_000; // 1e21
 /// Default and bounds for the claim lockup delay (#259).
 pub const DEFAULT_CLAIM_LOCKUP_SECONDS: u64 = 3_600;
 pub const MAX_CLAIM_LOCKUP_SECONDS: u64 = 604_800; // 7 days
@@ -134,7 +134,14 @@ pub enum Error {
     NotInitialized = 43,
     Reentrancy = 44,
     TokenTransferFailed = 45,
-    EmergencyTooEarly = 50,
+    DeadlinePassed = 47,
+    SlippageExceeded = 48,
+    InvalidIndex = 49,
+    MorePrizesThanTickets = 50,
+    ZeroPrize = 51,
+    InvalidTokenAddress = 52,
+    TooManyPrizes = 53,
+    EmergencyTooEarly = 54,
 }
 
 fn read_raffle(env: &Env) -> Result<Raffle, Error> {
@@ -237,6 +244,14 @@ fn require_not_paused(env: &Env) -> Result<(), Error> {
     Ok(())
 }
 
+fn validate_token_address(env: &Env, token_address: &Address) -> Result<(), Error> {
+    let token_client = token::Client::new(env, token_address);
+    token_client
+        .try_decimals()
+        .map_err(|_| Error::InvalidTokenAddress)?;
+    Ok(())
+}
+
 fn build_internal_seed_u64(env: &Env) -> u64 {
     let xdr = (
         env.ledger().timestamp(),
@@ -319,8 +334,14 @@ impl Contract {
         if config.prize_amount < config.ticket_price {
             return Err(Error::InvalidParameters);
         }
+        if config.prize_amount > MAX_PRIZE_AMOUNT {
+            return Err(Error::InvalidParameters);
+        }
         if config.prizes.is_empty() {
             return Err(Error::InvalidParameters);
+        }
+        if config.prizes.len() > MAX_PRIZES {
+            return Err(Error::TooManyPrizes);
         }
         let mut total_prizes_bp = 0u32;
         for prize_bp in config.prizes.iter() {
@@ -352,6 +373,9 @@ impl Contract {
         if config.metadata_hash == BytesN::from_array(&env, &[0u8; 32]) {
             return Err(Error::InvalidParameters);
         }
+
+        // Validate that the payment_token is a valid token contract
+        validate_token_address(&env, &config.payment_token)?;
 
         // #259: claim_lockup_seconds must be within [0, MAX_CLAIM_LOCKUP_SECONDS].
         // Zero is interpreted as "use the default".
@@ -1028,7 +1052,6 @@ impl Contract {
                 }
             }
             RaffleStatus::Drawing => {
-                // If raffle had an explicit end time, allow after end_time + delay
                 if raffle.end_time == 0 || now < raffle.end_time + EMERGENCY_WITHDRAW_DELAY_SECONDS {
                     return Err(Error::EmergencyTooEarly);
                 }
