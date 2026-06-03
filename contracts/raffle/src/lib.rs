@@ -1,9 +1,12 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, xdr::ToXdr, Address, Bytes, BytesN, Env,
-    IntoVal, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, Address, Bytes, BytesN, Env, IntoVal,
+    Symbol, Vec,
 };
+
+#[cfg(not(test))]
+use soroban_sdk::xdr::ToXdr;
 
 #[cfg(test)]
 use soroban_sdk::testutils::Address as _;
