@@ -7,17 +7,7 @@ use soroban_sdk::{
     Address, BytesN, Env,
 };
 
-mod mock_factory {
-    use soroban_sdk::{contractimpl, Address, Env};
-
-    pub struct MockFactory;
-
-    #[contractimpl]
-    impl MockFactory {
-        pub fn record_volume(_env: Env, _contract: Address, _token: Address, _amount: i128) {}
-        pub fn track_participant(_env: Env, _participant: Address) {}
-    }
-}
+use crate::mock_factory::MockFactory;
 
 #[test]
 fn test_oracle_fallback_with_ledger_delays() {
@@ -25,8 +15,7 @@ fn test_oracle_fallback_with_ledger_delays() {
     env.mock_all_auths();
 
     // 1. Setup factory, admin, creator
-    let factory_id = env.register_contract(None, mock_factory::MockFactory);
-    let factory = factory_id.address();
+    let factory = env.register(MockFactory, ());
     let admin = Address::generate(&env);
     let creator = Address::generate(&env);
     let oracle = Address::generate(&env);
@@ -37,8 +26,7 @@ fn test_oracle_fallback_with_ledger_delays() {
     let token_client = StellarAssetClient::new(&env, &payment_token);
     token_client.mint(&creator, &100_000_000);
 
-    #[allow(deprecated)]
-    let contract_id = env.register_contract(None, Contract);
+    let contract_id = env.register(Contract, ());
     let client = ContractClient::new(&env, &contract_id);
 
     // 2. Initialize Raffle with External Randomness
