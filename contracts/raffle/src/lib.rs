@@ -18,7 +18,7 @@ use raffle_shared::{
 };
 
 pub const TIMELOCK_DELAY_SECONDS: u64 = 172800; // 48 hours
-pub const CHECKPOINT_INTERVAL: u32 = 1_000;
+pub const CHECKPOINT_INTERVAL: u64 = 1_000;
 
 #[derive(Clone)]
 #[contracttype]
@@ -31,7 +31,7 @@ pub struct PendingOp {
 #[derive(Clone)]
 #[contracttype]
 pub struct StateCheckpoint {
-    pub index: u32,
+    pub index: u64,
     pub raffle_count: u32,
     pub ledger_timestamp: u64,
     pub aggregate_hash: BytesN<32>,
@@ -49,7 +49,7 @@ pub enum DataKey {
     PendingAdmin,
     PendingOp(u32),
     OpCounter,
-    Checkpoint(u32),
+    Checkpoint(u64),
     LatestCheckpointIndex,
     TotalRafflesCreated,
     UniqueParticipant(Address),
@@ -86,6 +86,7 @@ pub enum ContractError {
     InvalidRaffleId = 16,
     RaffleNotEligible = 17,
     ArithmeticOverflow = 18,
+    RaffleCountOverflow = 19,
 }
 
 #[contract]
@@ -132,11 +133,11 @@ fn require_registered_raffle(env: &Env, raffle_address: &Address) -> Result<(), 
 }
 
 fn maybe_create_checkpoint(env: &Env, raffle_count: u32) {
-    if raffle_count == 0 || !raffle_count.is_multiple_of(CHECKPOINT_INTERVAL) {
+    if raffle_count == 0 || raffle_count % (CHECKPOINT_INTERVAL as u32) != 0 {
         return;
     }
 
-    let index = raffle_count / CHECKPOINT_INTERVAL;
+    let index = u64::from(raffle_count) / CHECKPOINT_INTERVAL;
     let ledger_timestamp = env.ledger().timestamp();
     let ledger_sequence = env.ledger().sequence();
 
@@ -414,7 +415,7 @@ impl RaffleFactory {
                 .persistent()
                 .get(&DataKey::RaffleInstancesCount)
                 .unwrap_or(0);
-            count += 1;
+            count = count.checked_add(1).expect("RaffleInstancesCount overflow");
             env.storage()
                 .persistent()
                 .set(&DataKey::RaffleInstancesCount, &count);
@@ -443,7 +444,7 @@ impl RaffleFactory {
             .persistent()
             .get(&DataKey::TotalRafflesCreated)
             .unwrap_or(0);
-        count += 1;
+        count = count.checked_add(1).ok_or(ContractError::RaffleCountOverflow)?;
         env.storage()
             .persistent()
             .set(&DataKey::TotalRafflesCreated, &count);
@@ -627,15 +628,15 @@ impl RaffleFactory {
         Ok(())
     }
 
-    pub fn get_checkpoint(env: Env, index: u32) -> Option<StateCheckpoint> {
+    pub fn get_checkpoint(env: Env, index: u64) -> Option<StateCheckpoint> {
         env.storage().persistent().get(&DataKey::Checkpoint(index))
     }
 
-    pub fn get_latest_checkpoint_index(env: Env) -> u32 {
+    pub fn get_latest_checkpoint_index(env: Env) -> u64 {
         env.storage()
             .persistent()
             .get(&DataKey::LatestCheckpointIndex)
-            .unwrap_or(0u32)
+            .unwrap_or(0u64)
     }
 
     pub fn sync_admin(env: Env, instance_address: Address) -> Result<(), ContractError> {
