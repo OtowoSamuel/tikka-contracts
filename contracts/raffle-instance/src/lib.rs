@@ -1038,7 +1038,9 @@ impl Contract {
         let amount = calculate_tier_prize(&raffle, tier_index)?;
 
         let fee = amount * (raffle.protocol_fee_bp as i128) / 10000;
-        let net_amount = amount - fee;
+        let net_amount = amount
+            .checked_sub(fee)
+            .ok_or(Error::ArithmeticOverflow)?;
         require!(net_amount > 0, Error::ZeroPrize);
 
         raffle.claimed_winners.set(tier_index, true);
