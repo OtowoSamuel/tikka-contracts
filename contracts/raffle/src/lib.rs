@@ -57,6 +57,7 @@ pub enum DataKey {
     MinCreationDelay,
     LastCreationTime(Address),
     WhitelistedPartner(Address),
+    SupportedSac(Address),
     TotalVolumePerAsset(Address),
     RaffleInstancesCount,
 }
@@ -332,6 +333,7 @@ impl RaffleFactory {
     ) -> Result<Address, ContractError> {
         creator.require_auth();
         require_factory_not_paused(&env)?;
+        require_supported_sac(&env, &config.payment_token)?;
 
         let is_whitelisted = env
             .storage()

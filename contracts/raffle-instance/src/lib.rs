@@ -263,9 +263,10 @@ fn validate_token_address(env: &Env, token_address: &Address) -> Result<(), Erro
 
 fn build_internal_seed_u64(env: &Env) -> u64 {
     let xdr = (
-        env.ledger().timestamp(),
         env.ledger().sequence(),
+        env.ledger().timestamp(),
         env.current_contract_address(),
+        tickets_sold,
     )
         .to_xdr(env);
     let hash: BytesN<32> = env.crypto().sha256(&xdr).into();
@@ -869,14 +870,24 @@ impl Contract {
     ) -> Result<Address, Error> {
         let raffle = read_raffle(&env)?;
 
+        // Verify this raffle was configured to use an external oracle.
+        if raffle.randomness_source != RandomnessSource::External {
+            return Err(Error::NotAuthorized);
+        }
+
+        // Retrieve the designated oracle address; reject if none was set.
         let oracle = match &raffle.oracle_address {
-            Some(addr) => {
-                addr.require_auth();
-                addr.clone()
-            }
+            Some(addr) => addr.clone(),
             None => return Err(Error::OracleNotSet),
         };
 
+        // Require authorization from the designated oracle address only.
+        // Any other caller — including the creator or admin — will be rejected
+        // by Soroban's auth framework here.
+        oracle.require_auth();
+
+        // Validate contract state: a randomness request must be outstanding
+        // and the raffle must be in the Drawing phase.
         if raffle.status != RaffleStatus::Drawing {
             return Err(Error::InvalidStateTransition);
         }
