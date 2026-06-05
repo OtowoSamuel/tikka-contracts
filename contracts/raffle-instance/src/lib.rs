@@ -85,6 +85,7 @@ pub struct Raffle {
     pub end_time: u64,
     pub no_deadline: bool,
     pub max_tickets: u32,
+    pub max_tickets_per_wallet: Option<u32>,
     pub min_tickets: u32,
     pub tickets_sold: u32,
     pub protocol_fee_bp: u32,
@@ -154,6 +155,7 @@ pub enum Error {
     NoActiveTickets = 46,
     TicketNotFound = 34,
     RaffleEnded = 35,
+    WalletTicketLimitExceeded = 36,
     ArithmeticOverflow = 41,
     AlreadyInitialized = 42,
     NotInitialized = 43,
@@ -336,6 +338,9 @@ impl Contract {
         if config.max_tickets == 0 || config.max_tickets > MAX_TICKETS_LIMIT {
             return Err(Error::InvalidParameters);
         }
+        if matches!(config.max_tickets_per_wallet, Some(0)) {
+            return Err(Error::InvalidParameters);
+        }
         if config.max_tickets < config.min_tickets {
             return Err(Error::InvalidTicketRange);
         }
@@ -409,6 +414,7 @@ impl Contract {
             end_time: config.end_time,
             no_deadline: config.no_deadline,
             max_tickets: config.max_tickets,
+            max_tickets_per_wallet: config.max_tickets_per_wallet,
             min_tickets: config.min_tickets,
             allow_multiple: config.allow_multiple,
             ticket_price: config.ticket_price,
@@ -539,13 +545,17 @@ impl Contract {
                 return Err(Error::InvalidParameters);
             }
 
-        let current_count: u32 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::TicketCount(buyer.clone()))
-            .unwrap_or(0);
+        let current_count = read_buyer_ticket_count(&env, &buyer);
         if !raffle.allow_multiple && (current_count > 0 || quantity > 1) {
             return Err(Error::MultipleTicketsNotAllowed);
+        }
+        if let Some(max_tickets_per_wallet) = raffle.max_tickets_per_wallet {
+            let updated_count = current_count
+                .checked_add(quantity)
+                .ok_or(Error::ArithmeticOverflow)?;
+            if updated_count > max_tickets_per_wallet {
+                return Err(Error::WalletTicketLimitExceeded);
+            }
         }
 
         // Reserve ticket id range from NextTicketId (read-only for now)
@@ -616,10 +626,7 @@ impl Contract {
             .publish(&env);
         }
 
-        env.storage().persistent().set(
-            &DataKey::TicketCount(buyer.clone()),
-            &(current_count + quantity),
-        );
+        write_buyer_ticket_count(&env, &buyer, current_count + quantity);
         write_raffle(&env, &raffle);
 
         if let Some(factory_address) = env
