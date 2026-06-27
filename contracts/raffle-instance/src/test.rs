@@ -238,3 +238,74 @@ fn test_admin_withdraws_accumulated_fees() {
         fee_amount
     );
 }
+
+#[test]
+fn test_race_condition_fix_buy_tickets_triggers_randomness() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    // Setup
+    let factory = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let payment_token = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_client = StellarAssetClient::new(&env, &payment_token);
+    token_client.mint(&creator, &1_000_000);
+    token_client.mint(&buyer, &1_000_000);
+
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    let config = RaffleConfig {
+        description: String::from_str(&env, "Race fix test"),
+        end_time: 0,
+        no_deadline: true,
+        max_tickets: 10,
+        min_tickets: 1,
+        allow_multiple: true,
+        ticket_price: MIN_TICKET_PRICE,
+        payment_token: payment_token.clone(),
+        prize_amount: MIN_TICKET_PRICE * 10,
+        prizes: soroban_sdk::vec![&env, 10000],
+        randomness_source: RandomnessSource::External,
+        oracle_address: Some(oracle.clone()),
+        protocol_fee_bp: 0,
+        treasury_address: None,
+        swap_router: None,
+        tikka_token: None,
+        metadata_hash: BytesN::from_array(&env, &[5; 32]),
+        claim_lockup_seconds: 0,
+    };
+
+    client.init(&factory, &admin, &creator, &config);
+    client.deposit_prize();
+
+    // Buy all tickets - should automatically transition to Drawing and request randomness
+    client.buy_tickets(&buyer, &10);
+
+    // Verify raffle status is Drawing and randomness was requested
+    let raffle = client.get_raffle();
+    assert_eq!(raffle.status, RaffleStatus::Drawing);
+
+    // Check that RandomnessRequested is true
+    let randomness_requested: bool = env
+        .as_contract(&contract_id, || {
+            env.storage()
+                .instance()
+                .get(&crate::DataKey::RandomnessRequested)
+                .unwrap_or(false)
+        });
+    assert!(randomness_requested);
+
+    // Now try to call finalize_raffle again - should fail with RandomnessAlreadyRequested
+    let result = client.try_finalize_raffle();
+    assert_eq!(
+        result.err(),
+        Some(Ok(crate::Error::RandomnessAlreadyRequested))
+    );
+}
