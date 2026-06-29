@@ -37,6 +37,7 @@ pub const MAX_CLAIM_LOCKUP_SECONDS: u64 = 604_800; // 7 days
 pub struct Contract;
 
 #[derive(Clone)]
+#[soroban_sdk::contracttype]
 pub struct Raffle {
     pub creator: Address,
     pub description: String,
@@ -66,6 +67,7 @@ pub struct Raffle {
 }
 
 #[derive(Clone)]
+#[soroban_sdk::contracttype]
 pub struct FairnessMetadata {
     pub seed: u64,
     pub randomness_source: RandomnessSource,
@@ -580,7 +582,7 @@ impl Contract {
             }
         }
 
-        if tier_index as usize >= raffle.winners.len() {
+        if tier_index >= raffle.winners.len() {
             return Err(Error::InvalidParameters);
         }
 
@@ -725,6 +727,49 @@ impl Contract {
 
         release_guard(&env);
         Ok(raffle.ticket_price)
+    }
+
+    pub fn batch_refund_tickets(env: Env, owner: Address, ticket_ids: Vec<u32>) -> Result<i128, Error> {
+        owner.require_auth();
+        acquire_guard(&env)?;
+        let raffle = read_raffle(&env)?;
+
+        if raffle.status != RaffleStatus::Cancelled && raffle.status != RaffleStatus::Failed {
+            return Err(Error::InvalidStatus);
+        }
+        if ticket_ids.len() > 50 {  // per-tx cap to stay within compute limits
+            return Err(Error::InvalidParameters);
+        }
+
+        let mut total_refund = 0i128;
+        
+        for ticket_id in ticket_ids.iter() {
+            let ticket: Ticket = env.storage().persistent()
+                .get(&DataKey::Ticket(ticket_id)).ok_or(Error::TicketNotFound)?;
+            
+            if ticket.owner != owner { return Err(Error::NotAuthorized); }
+            
+            let refund_key = (DataKey::Ticket(ticket_id), Symbol::new(&env, "refunded"));
+            if env.storage().persistent().has(&refund_key) { continue; }
+            
+            env.storage().persistent().set(&refund_key, &true);
+            total_refund += raffle.ticket_price;
+
+            crate::events::TicketRefunded {
+                buyer: ticket.owner,
+                ticket_number: ticket.ticket_number,
+                amount: raffle.ticket_price,
+                timestamp: env.ledger().timestamp(),
+            }.publish(&env);
+        }
+
+        if total_refund > 0 {
+            let token_client = token::Client::new(&env, &raffle.payment_token);
+            token_client.transfer(&env.current_contract_address(), &owner, &total_refund);
+        }
+        
+        release_guard(&env);
+        Ok(total_refund)
     }
 
     pub fn get_raffle(env: Env) -> Result<Raffle, Error> {
@@ -878,3 +923,255 @@ fn do_finalize_with_seed(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::{
+        testutils::Address as _,
+        token, Address, BytesN, Env, String, Vec,
+    };
+    use raffle_shared::{CancelReason, RandomnessSource, RaffleConfig};
+
+    // ── helpers ──────────────────────────────────────────────────────────────
+
+    #[contract]
+    pub struct MockFactory;
+
+    #[contractimpl]
+    impl MockFactory {
+        pub fn record_volume(_env: Env, _asset: Address, _amount: i128) {}
+        pub fn track_participant(_env: Env, _participant: Address) {}
+    }
+
+    fn make_token(env: &Env) -> (token::Client<'_>, Address) {
+        let admin = Address::generate(env);
+        let contract = env.register_stellar_asset_contract_v2(admin.clone());
+        (token::Client::new(env, &contract.address()), admin)
+    }
+
+    fn mint(env: &Env, _token_admin: &Address, token_addr: &Address, to: &Address, amount: i128) {
+        token::StellarAssetClient::new(env, token_addr).mint(to, &amount);
+    }
+
+    fn default_config(env: &Env, payment_token: Address) -> RaffleConfig {
+        let mut prizes = Vec::new(env);
+        prizes.push_back(10_000u32); // 100 % to single winner
+        RaffleConfig {
+            description:          String::from_str(env, "Test raffle"),
+            end_time:             0,
+            max_tickets:          1_000,
+            min_tickets:          0,
+            allow_multiple:       true,
+            ticket_price:         100_000i128,
+            payment_token,
+            prize_amount:         100_000i128,
+            prizes,
+            randomness_source:    RandomnessSource::Internal,
+            oracle_address:       None,
+            protocol_fee_bp:      0,
+            treasury_address:     None,
+            swap_router:          None,
+            tikka_token:          None,
+            metadata_hash:        BytesN::from_array(env, &[1u8; 32]),
+            claim_lockup_seconds: 0,
+        }
+    }
+
+    /// Register a raffle-instance, call `init`, deposit prize, and return the
+    /// client plus relevant addresses.
+    fn setup_raffle(env: &Env) -> (ContractClient<'_>, Address, Address, token::Client<'_>) {
+        let factory  = env.register(MockFactory, ());
+        let admin    = Address::generate(env);
+        let creator  = Address::generate(env);
+
+        let (token, token_admin) = make_token(env);
+        // Give creator enough to cover prize deposit.
+        mint(env, &token_admin, &token.address, &creator, 10_000_000);
+
+        let contract_id = env.register(Contract, ());
+        let client = ContractClient::new(env, &contract_id);
+
+        client.init(&factory, &admin, &creator, &default_config(env, token.address.clone()));
+        client.deposit_prize();
+
+        // Return token_admin as the 3rd element (the caller can mint with it).
+        (client, creator, token_admin, token)
+    }
+
+    /// Buy `count` tickets for `buyer`, returns a Vec of the ticket IDs just
+    /// minted (the contract assigns IDs starting from 1, sequentially).
+    fn buy_n_tickets(
+        env:    &Env,
+        client: &ContractClient,
+        token:  &token::Client,
+        token_admin: &Address,
+        buyer:  &Address,
+        count:  u32,
+    ) -> Vec<u32> {
+        mint(env, token_admin, &token.address, buyer, 100_000i128 * count as i128 * 2);
+
+        // Read the NextTicketId *before* the purchase.
+        let before: u32 = env.as_contract(&client.address, || {
+            env.storage().instance().get::<_, u32>(&DataKey::NextTicketId).unwrap_or(0)
+        });
+
+        client.buy_tickets(buyer, &count);
+
+        let mut ids = Vec::new(env);
+        for id in (before + 1)..=(before + count) {
+            ids.push_back(id);
+        }
+        ids
+    }
+
+    // ── tests ─────────────────────────────────────────────────────────────────
+
+    /// Core acceptance-criteria test:
+    ///   10 tickets purchased, 5 individually refunded first,
+    ///   batch_refund_tickets called with all 10 IDs →
+    ///   only the remaining 5 are processed.
+    #[test]
+    fn test_batch_refund_skips_already_refunded() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, _creator, token_admin, token) = setup_raffle(&env);
+        let buyer = Address::generate(&env);
+        mint(&env, &token_admin, &token.address, &buyer, 100_000 * 10 * 2);
+
+        // Buy 10 tickets.
+        let before: u32 = env.as_contract(&client.address, || {
+            env.storage().instance().get::<_, u32>(&DataKey::NextTicketId).unwrap_or(0)
+        });
+        client.buy_tickets(&buyer, &10u32);
+        let mut ticket_ids: Vec<u32> = Vec::new(&env);
+        for id in (before + 1)..=(before + 10) {
+            ticket_ids.push_back(id);
+        }
+
+        // Cancel.
+        client.cancel_raffle(&CancelReason::CreatorCancelled);
+
+        // Pre-refund tickets 0..5 (the first 5).
+        for i in 0..5u32 {
+            client.refund_ticket(&ticket_ids.get(i).unwrap());
+        }
+
+        let balance_before = token.balance(&buyer);
+
+        // Batch-refund all 10 — only the last 5 should go through.
+        let total = client.batch_refund_tickets(&buyer, &ticket_ids);
+
+        assert_eq!(total, 5 * 100_000i128, "Only 5 unrefunded tickets should be processed");
+        assert_eq!(
+            token.balance(&buyer) - balance_before,
+            5 * 100_000i128,
+            "Balance should increase by exactly 5 * ticket_price"
+        );
+    }
+
+    /// A caller who is not the ticket owner must be rejected with NotAuthorized.
+    #[test]
+    fn test_batch_refund_rejects_wrong_owner() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, _creator, token_admin, token) = setup_raffle(&env);
+        let buyer    = Address::generate(&env);
+        let attacker = Address::generate(&env);
+
+        mint(&env, &token_admin, &token.address, &buyer, 100_000 * 3 * 2);
+        let before: u32 = env.as_contract(&client.address, || {
+            env.storage().instance().get::<_, u32>(&DataKey::NextTicketId).unwrap_or(0)
+        });
+        client.buy_tickets(&buyer, &3u32);
+        let mut ids: Vec<u32> = Vec::new(&env);
+        for id in (before + 1)..=(before + 3) {
+            ids.push_back(id);
+        }
+
+        client.cancel_raffle(&CancelReason::CreatorCancelled);
+
+        // Attacker tries to claim buyer's refund — must fail.
+        let result = client.try_batch_refund_tickets(&attacker, &ids);
+        assert!(result.is_err(), "Should have rejected wrong owner");
+    }
+
+    /// Calling batch_refund_tickets while the raffle is Active must fail.
+    #[test]
+    fn test_batch_refund_rejects_active_raffle() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, _creator, token_admin, token) = setup_raffle(&env);
+        let buyer = Address::generate(&env);
+
+        mint(&env, &token_admin, &token.address, &buyer, 100_000 * 2 * 2);
+        let before: u32 = env.as_contract(&client.address, || {
+            env.storage().instance().get::<_, u32>(&DataKey::NextTicketId).unwrap_or(0)
+        });
+        client.buy_tickets(&buyer, &2u32);
+        let mut ids: Vec<u32> = Vec::new(&env);
+        for id in (before + 1)..=(before + 2) {
+            ids.push_back(id);
+        }
+
+        // Do NOT cancel — raffle remains Active.
+        let result = client.try_batch_refund_tickets(&buyer, &ids);
+        assert!(result.is_err(), "Must reject when raffle is not cancelled/failed");
+    }
+
+    /// Passing more than 50 ticket IDs must return InvalidParameters.
+    #[test]
+    fn test_batch_refund_rejects_over_cap() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, _creator, _token_admin, _token) = setup_raffle(&env);
+        let buyer = Address::generate(&env);
+
+        client.cancel_raffle(&CancelReason::CreatorCancelled);
+
+        // Build a Vec of 51 dummy IDs.
+        let mut big_ids: Vec<u32> = Vec::new(&env);
+        for i in 1u32..=51 {
+            big_ids.push_back(i);
+        }
+
+        let result = client.try_batch_refund_tickets(&buyer, &big_ids);
+        assert!(result.is_err(), "Should reject more than 50 ticket IDs");
+    }
+
+    /// Calling batch_refund_tickets twice with the same IDs must be a no-op
+    /// on the second call (total refund returns 0, no double-spend).
+    #[test]
+    fn test_batch_refund_idempotent() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, _creator, token_admin, token) = setup_raffle(&env);
+        let buyer = Address::generate(&env);
+
+        mint(&env, &token_admin, &token.address, &buyer, 100_000 * 5 * 2);
+        let before: u32 = env.as_contract(&client.address, || {
+            env.storage().instance().get::<_, u32>(&DataKey::NextTicketId).unwrap_or(0)
+        });
+        client.buy_tickets(&buyer, &5u32);
+        let mut ids: Vec<u32> = Vec::new(&env);
+        for id in (before + 1)..=(before + 5) {
+            ids.push_back(id);
+        }
+
+        client.cancel_raffle(&CancelReason::CreatorCancelled);
+
+        // First call — all 5 processed.
+        let first = client.batch_refund_tickets(&buyer, &ids);
+        assert_eq!(first, 5 * 100_000i128);
+
+        // Second call — all already refunded, should return 0.
+        let second = client.batch_refund_tickets(&buyer, &ids);
+        assert_eq!(second, 0i128, "Second call must be a no-op");
+    }
+}
+
