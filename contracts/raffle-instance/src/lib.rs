@@ -1183,10 +1183,7 @@ impl Contract {
         }
 
         let amount = calculate_tier_prize(&raffle, tier_index)?;
-
-        let fee = amount * (raffle.protocol_fee_bp as i128) / 10000;
-        let net_amount = amount - fee;
-        if net_amount <= 0 {
+        if amount <= 0 {
             return Err(Error::ZeroPrize);
         }
 
@@ -1212,37 +1209,21 @@ impl Contract {
 
         let token_client = token::Client::new(&env, &raffle.payment_token);
         let _ = token_client
-            .try_transfer(&env.current_contract_address(), &winner, &net_amount)
+            .try_transfer(&env.current_contract_address(), &winner, &amount)
             .map_err(|_| Error::TokenTransferFailed)?;
-
-        if fee > 0 {
-            if let Some(treasury) = &raffle.treasury_address {
-                let _ = token_client
-                    .try_transfer(&env.current_contract_address(), treasury, &fee)
-                    .map_err(|_| Error::TokenTransferFailed)?;
-            }
-            let prev_fees: i128 = env
-                .storage()
-                .instance()
-                .get(&DataKey::AccumulatedFees)
-                .unwrap_or(0);
-            env.storage()
-                .instance()
-                .set(&DataKey::AccumulatedFees, &(prev_fees + fee));
-        }
 
         PrizeClaimed {
             winner,
             tier_index,
             payment_token: raffle.payment_token.clone(),
             gross_amount: amount,
-            net_amount,
-            platform_fee: fee,
+            net_amount: amount,
+            platform_fee: 0,
             claimed_at: env.ledger().timestamp(),
         }
         .publish(&env);
 
-        Ok(net_amount)
+        Ok(amount)
     }
 
     pub fn withdraw_fees(env: Env, recipient: Address, amount: i128) -> Result<(), Error> {
@@ -1427,7 +1408,6 @@ impl Contract {
     }
 
     pub fn refund_ticket(env: Env, ticket_id: u32) -> Result<i128, Error> {
-        acquire_guard(&env)?;
         let raffle = read_raffle(&env)?;
 
         // #258: status check BEFORE require_auth to prevent double-spend on
