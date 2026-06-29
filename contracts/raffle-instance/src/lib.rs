@@ -223,6 +223,7 @@ fn acquire_guard(env: &Env) -> Result<(), Error> {
 
 // Helper to enforce slippage and deadline guards for token swaps
 // Uses the raffle's configurable swap_deadline_seconds to calculate the deadline
+#[allow(dead_code)]
 fn enforce_swap_guard(
     env: &Env,
     raffle: &Raffle,
@@ -889,7 +890,7 @@ impl Contract {
         // #169: zero tickets sold is always a failure regardless of min_tickets,
         // ensuring the creator can recover their deposited prize via refund_prize.
         if raffle.tickets_sold == 0 || raffle.tickets_sold < raffle.min_tickets {
-            let old_status = raffle.status.clone();
+            let _old_status = raffle.status.clone();
             raffle.status = RaffleStatus::Failed;
             write_raffle(&env, &raffle);
 
@@ -1933,6 +1934,7 @@ mod test {
             tikka_token: None,
             metadata_hash: BytesN::from_array(&env, &[1u8; 32]),
             claim_lockup_seconds: 0, // => DEFAULT_CLAIM_LOCKUP_SECONDS (3600)
+            swap_deadline_seconds: 0,
         };
 
         client.init(&factory, &admin, &creator, &config);
@@ -1993,6 +1995,7 @@ mod test {
             tikka_token: None,
             metadata_hash: BytesN::from_array(&env, &[5u8; 32]),
             claim_lockup_seconds: 0,
+            swap_deadline_seconds: 0,
         };
 
         client.init(&factory, &admin, &creator, &config);
@@ -2048,6 +2051,7 @@ mod test {
             tikka_token: None,
             metadata_hash: BytesN::from_array(env, &[7u8; 32]),
             claim_lockup_seconds: 0,
+            swap_deadline_seconds: 0,
         };
 
         client.init(&factory, &admin, &creator, &config);
