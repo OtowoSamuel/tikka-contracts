@@ -15,3 +15,4 @@ soroban-sdk = { workspace = true, features = ["testutils"] }
 
 [features]
 testutils = ["soroban-sdk/testutils"]
+ed25519-dalek = { version = "2", features = ["rand_core"] }
